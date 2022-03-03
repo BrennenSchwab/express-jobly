@@ -44,27 +44,62 @@ class Company {
     return company;
   }
 
-  /** Find all companies.
+  /** Find all companies and filters are optional.
+   * searchFilters:
+   * - minEmployees
+   * - maxEmployees
+   * - name (case-sensitive, companies containing "name")
    *
    * Returns [{ handle, name, description, numEmployees, logoUrl }, ...]
    * */
 
-  static async findAll() {
-    const companiesRes = await db.query(
-          `SELECT handle,
-                  name,
-                  description,
-                  num_employees AS "numEmployees",
-                  logo_url AS "logoUrl"
-           FROM companies
-           ORDER BY name`);
+  static async findAll(searchFilters = {}) {
+    let query = `SELECT handle,
+                        name,
+                        description,
+                        num_employees AS "numEmployees",
+                        logo_url AS "logoUrl"
+                 FROM companies`;
+    let whereFilters = []; // used for addign values and WHERE expressions to final PSQL
+    let queryValues = [];
+
+    const { name, minEmployees, maxEmployees } = searchFilters;
+
+    if (minEmployees > maxEmployees) {
+      throw new BadRequestError("Min employees can't be greater than the Max employees");
+    }
+
+    // Add search values to whereFilters and queryValues to add to and cretae the proper PSQL expressions
+
+    if (name) {
+      queryValues.push(`%${name}%`);
+      whereFilters.push(`name ILIKE $${queryValues.length}`);//ILIKE for case-sensitvity
+    }
+
+    if (minEmployees !== undefined) {
+      queryValues.push(minEmployees);
+      whereFilters.push(`num_employees >= $${queryValues.length}`);
+    }
+
+    if (maxEmployees !== undefined) {
+      queryValues.push(maxEmployees);
+      whereFilters.push(`num_employees <= $${queryValues.length}`);
+    }
+
+    if (whereFilters.length > 0) {
+      query += " WHERE " + whereFilters.join(" AND ");
+    }
+
+    // Complete query from search filters, and return the result, odered by name
+
+    query += " ORDER BY name";
+    const companiesRes = await db.query(query, queryValues);
     return companiesRes.rows;
   }
-
   /** Given a company handle, return data about company.
    *
    * Returns { handle, name, description, numEmployees, logoUrl, jobs }
-   *   where jobs is [{ id, title, salary, equity, companyHandle }, ...]
+   *   where jobs is [{ id, title, salary, equity }, ...]
    *
    * Throws NotFoundError if not found.
    **/
@@ -83,6 +118,15 @@ class Company {
     const company = companyRes.rows[0];
 
     if (!company) throw new NotFoundError(`No company: ${handle}`);
+
+    const jobsRes = await db.query(
+          `SELECT id, title, salary, equity
+          FROM jobs
+          WHERE company_handle = $1
+          ORDER BY id`,
+        [handle],
+    );
+    company.jobs = jobsRes.rows;
 
     return company;
   }
